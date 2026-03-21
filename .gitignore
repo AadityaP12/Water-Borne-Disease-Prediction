@@ -18,3 +18,8 @@ node_modules/
 
 # Misc
 .DS_Store
+
+# Sensitive files
+backend/firebase-service-account.json
+frontend/android/app/google-services.json
+frontend/lib/firebase_options.dart

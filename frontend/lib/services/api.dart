@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'package:dio/dio.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
-  // ← your PC's local IP, port 8081
   static const String baseUrl = 'http://192.168.1.7:8081/api/v1';
 
   static final Dio _dio = Dio(BaseOptions(
@@ -13,23 +13,14 @@ class ApiService {
     headers: {'Content-Type': 'application/json'},
   ));
 
-  // --- Token storage ---
-  static Future<void> saveToken(String token) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('auth_token', token);
-  }
-
+  // --- Get fresh Firebase ID token ---
   static Future<String?> getToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('auth_token');
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return null;
+    return await user.getIdToken();
   }
 
-  static Future<void> clearToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('auth_token');
-  }
-
-  // --- User storage ---
+  // --- User profile storage (role, district, state etc from Firestore) ---
   static Future<void> saveUser(Map<String, dynamic> user) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('user', jsonEncode(user));
@@ -45,6 +36,12 @@ class ApiService {
   static Future<void> clearUser() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('user');
+  }
+
+  // --- Sign out ---
+  static Future<void> signOut() async {
+    await FirebaseAuth.instance.signOut();
+    await clearUser();
   }
 
   // --- API call helper ---

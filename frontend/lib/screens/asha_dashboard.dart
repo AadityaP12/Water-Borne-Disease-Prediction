@@ -1046,8 +1046,7 @@ class _AshaDashboardState extends State<AshaDashboard> {
             const SizedBox(height: 16),
             OutlinedButton(
               onPressed: () async {
-                await ApiService.clearToken();
-                await ApiService.clearUser();
+                await ApiService.signOut();
                 if (mounted) context.go('/login');
               },
               style: OutlinedButton.styleFrom(

@@ -642,8 +642,7 @@ class _GovDashboardState extends State<GovDashboard> {
             const SizedBox(height: 20),
             OutlinedButton(
               onPressed: () async {
-                await ApiService.clearToken();
-                await ApiService.clearUser();
+                await ApiService.signOut();
                 if (mounted) context.go('/login');
               },
               style: OutlinedButton.styleFrom(

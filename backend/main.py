@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
 import uuid
@@ -10,10 +10,7 @@ from firebase_admin import messaging
 
 from config import settings
 from database import db, Col
-from auth import (
-    UserRegister, UserLogin, TokenResponse,
-    hash_password, verify_password, create_token, get_current_user
-)
+from auth import UserSync, get_current_user
 from predictor import run_pipeline
 
 logging.basicConfig(level=logging.INFO)
@@ -34,9 +31,9 @@ app.add_middleware(
 )
 
 
-# ───────────────────────────────────────────
+# ───────────────────────────────────────────────────────
 # FCM HELPER
-# ───────────────────────────────────────────
+# ───────────────────────────────────────────────────────
 
 def send_fcm_notification(tokens: list, title: str, body: str, data: dict = None):
     if not tokens:
@@ -70,49 +67,39 @@ def notify_district(state: str, district: str, title: str, body: str, data: dict
         logger.error(f"notify_district failed: {e}")
 
 
-# ───────────────────────────────────────────
+# ───────────────────────────────────────────────────────
 # AUTH ROUTES
-# ───────────────────────────────────────────
+# ───────────────────────────────────────────────────────
 
-@app.post(f"{settings.API_V1_STR}/auth/register")
-async def register(user: UserRegister):
-    existing = db.query(Col.USERS, filters=[("email", "==", user.email)])
+@app.post(f"{settings.API_V1_STR}/auth/sync-user")
+async def sync_user(profile: UserSync, current_user: dict = Depends(get_current_user)):
+    """
+    Called once after Firebase registration to save profile data to Firestore.
+    Uses the Firebase UID as the document ID.
+    """
+    uid = current_user["uid"]
+    email = current_user.get("email", "")
+
+    existing = db.get(Col.USERS, uid)
     if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
+        return {"status": "already exists", "user_id": uid, "role": existing["role"]}
 
-    user_id = str(uuid.uuid4())
     db.create(Col.USERS, {
-        "uid":                user_id,
-        "email":              user.email,
-        "password_hash":      hash_password(user.password),
-        "full_name":          user.full_name,
-        "phone_number":       user.phone_number,
-        "role":               user.role,
-        "state":              user.state,
-        "district":           user.district,
-        "block":              user.block,
-        "village":            user.village,
-        "preferred_language": user.preferred_language,
+        "uid":                uid,
+        "email":              email,
+        "full_name":          profile.full_name,
+        "phone_number":       profile.phone_number,
+        "role":               profile.role,
+        "state":              profile.state,
+        "district":           profile.district,
+        "block":              profile.block,
+        "village":            profile.village,
+        "preferred_language": profile.preferred_language,
         "fcm_token":          None,
         "created_at":         datetime.now(timezone.utc).isoformat(),
-    }, doc_id=user_id)
+    }, doc_id=uid)
 
-    token = create_token({"uid": user_id, "role": user.role})
-    return {"access_token": token, "token_type": "bearer", "user_id": user_id, "role": user.role}
-
-
-@app.post(f"{settings.API_V1_STR}/auth/login")
-async def login(credentials: UserLogin):
-    users = db.query(Col.USERS, filters=[("email", "==", credentials.email)])
-    if not users:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-
-    user = users[0]
-    if not verify_password(credentials.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-
-    token = create_token({"uid": user["uid"], "role": user["role"]})
-    return {"access_token": token, "token_type": "bearer", "user_id": user["uid"], "role": user["role"]}
+    return {"status": "created", "user_id": uid, "role": profile.role}
 
 
 @app.get(f"{settings.API_V1_STR}/auth/me")
@@ -120,12 +107,9 @@ async def get_me(current_user: dict = Depends(get_current_user)):
     user = db.get(Col.USERS, current_user["uid"])
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    user.pop("password_hash", None)
     return user
 
 
-# FIX: renamed from /auth/fcm-token, field renamed from fcm_token to push_token
-# to match what asha_dashboard.dart sends: POST /auth/update-push-token { push_token: ... }
 class FCMTokenUpdate(BaseModel):
     push_token: str
 
@@ -136,35 +120,9 @@ async def update_push_token(body: FCMTokenUpdate, current_user: dict = Depends(g
     return {"status": "fcm token updated"}
 
 
-# FIX: added missing endpoint — asha_dashboard.dart profile tab calls this
-class ProfileUpdate(BaseModel):
-    current_password: str
-    state: Optional[str] = None
-    district: Optional[str] = None
-    new_password: Optional[str] = None
-
-
-@app.post(f"{settings.API_V1_STR}/auth/update-profile")
-async def update_profile(body: ProfileUpdate, current_user: dict = Depends(get_current_user)):
-    user = db.get(Col.USERS, current_user["uid"])
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    if not verify_password(body.current_password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Incorrect current password")
-
-    updates: dict = {}
-    if body.state:        updates["state"]         = body.state
-    if body.district:     updates["district"]      = body.district
-    if body.new_password: updates["password_hash"] = hash_password(body.new_password)
-
-    if updates:
-        db.update(Col.USERS, current_user["uid"], updates)
-    return {"status": "profile updated"}
-
-
-# ───────────────────────────────────────────
+# ───────────────────────────────────────────────────────
 # DATA ROUTES
-# ───────────────────────────────────────────
+# ───────────────────────────────────────────────────────
 
 class WaterSourceInput(BaseModel):
     name: str
@@ -195,18 +153,10 @@ class HealthSubmission(BaseModel):
 
 @app.post(f"{settings.API_V1_STR}/data/submit")
 async def submit_data(submission: HealthSubmission, current_user: dict = Depends(get_current_user)):
-    """
-    Main data submission endpoint.
-    ASHA worker submits household health data + multiple water sources.
-    Runs the full ML pipeline for each water source.
-    Sends FCM alert if any source is high risk.
-    """
     from predictor import predict_health, predict_water
 
-    # Stage 1: Run health model once for all persons
     health_result = predict_health(submission.persons)
 
-    # Stage 2: Run water model for each water source
     water_results = []
     highest_risk_source = None
     highest_risk_percent = 0
@@ -244,7 +194,6 @@ async def submit_data(submission: HealthSubmission, current_user: dict = Depends
                 **water_result,
             }
 
-    # Store one record per submission (with all water source results)
     record_id = str(uuid.uuid4())
     record = {
         "id":                    record_id,
@@ -256,10 +205,8 @@ async def submit_data(submission: HealthSubmission, current_user: dict = Depends
         "village":               submission.village,
         "total_persons":         health_result["total_persons"],
         "persons_with_symptoms": health_result["persons_with_symptoms"],
-        # predictions now include age + symptom values so dashboard charts work
         "health_predictions":    health_result["predictions"],
         "water_sources":         water_results,
-        # backward-compat top-level fields — highest risk source
         "water_source_name":     highest_risk_source["name"]        if highest_risk_source else "",
         "water_risk_level":      highest_risk_source["risk_level"]  if highest_risk_source else "low",
         "water_risk_percent":    highest_risk_source["risk_percent"] if highest_risk_source else 0,
@@ -267,7 +214,6 @@ async def submit_data(submission: HealthSubmission, current_user: dict = Depends
     }
     db.create(Col.HEALTH_DATA, record, doc_id=record_id)
 
-    # Auto-create alert + FCM notification for each high-risk source
     alerts_created = []
     for wr in water_results:
         if wr["risk_level"] == "high":
@@ -321,9 +267,9 @@ async def get_history(current_user: dict = Depends(get_current_user)):
     return {"records": records}
 
 
-# ───────────────────────────────────────────
+# ───────────────────────────────────────────────────────
 # ALERTS ROUTES
-# ───────────────────────────────────────────
+# ───────────────────────────────────────────────────────
 
 class AlertCreate(BaseModel):
     type: str
@@ -366,9 +312,9 @@ async def resolve_alert(alert_id: str, current_user: dict = Depends(get_current_
     return {"alert_id": alert_id, "status": "resolved"}
 
 
-# ───────────────────────────────────────────
+# ───────────────────────────────────────────────────────
 # DASHBOARD ROUTES
-# ───────────────────────────────────────────
+# ───────────────────────────────────────────────────────
 
 @app.get(f"{settings.API_V1_STR}/dashboard/overview")
 async def dashboard_overview(current_user: dict = Depends(get_current_user)):
@@ -385,14 +331,14 @@ async def dashboard_overview(current_user: dict = Depends(get_current_user)):
         if sources:
             for s in sources:
                 level = s.get("risk_level", "low")
-                if level == "high":   high   += 1
+                if level == "high":     high   += 1
                 elif level == "medium": medium += 1
-                else:                 low    += 1
+                else:                   low    += 1
         else:
             level = r.get("water_risk_level", "low")
-            if level == "high":   high   += 1
+            if level == "high":     high   += 1
             elif level == "medium": medium += 1
-            else:                 low    += 1
+            else:                   low    += 1
 
     return {
         "total_submissions":    total_submissions,
@@ -404,13 +350,12 @@ async def dashboard_overview(current_user: dict = Depends(get_current_user)):
     }
 
 
-# ───────────────────────────────────────────
+# ───────────────────────────────────────────────────────
 # CHART DATA ROUTES
-# ───────────────────────────────────────────
+# ───────────────────────────────────────────────────────
 
 @app.get(f"{settings.API_V1_STR}/data/age-distribution")
 async def age_distribution(current_user: dict = Depends(get_current_user)):
-    """Age group distribution across all submitted persons."""
     records = db.query(Col.HEALTH_DATA, limit=500)
     buckets = {"0-17": 0, "18-34": 0, "35-49": 0, "50-64": 0, "65+": 0}
     for r in records:
@@ -431,7 +376,6 @@ async def age_distribution(current_user: dict = Depends(get_current_user)):
 
 @app.get(f"{settings.API_V1_STR}/data/symptom-frequency")
 async def symptom_frequency(current_user: dict = Depends(get_current_user)):
-    """How many persons reported each symptom (severity > 0)."""
     records = db.query(Col.HEALTH_DATA, limit=500)
     symptom_keys = [
         "diarrhea", "fatigue", "vomiting", "fever",
@@ -452,7 +396,6 @@ async def symptom_frequency(current_user: dict = Depends(get_current_user)):
 
 @app.get(f"{settings.API_V1_STR}/data/water-source-distribution")
 async def water_source_distribution(current_user: dict = Depends(get_current_user)):
-    """Count of each water source type across all submissions."""
     records = db.query(Col.HEALTH_DATA, limit=500)
     counts: dict = {}
     for r in records:
@@ -472,7 +415,6 @@ async def water_source_distribution(current_user: dict = Depends(get_current_use
 
 @app.get(f"{settings.API_V1_STR}/data/workers")
 async def get_workers(current_user: dict = Depends(get_current_user)):
-    """List of active ASHA workers with their submission counts."""
     workers = db.query(Col.USERS, filters=[("role", "==", "asha")])
     records = db.query(Col.HEALTH_DATA, limit=500)
     submission_counts = {}
@@ -493,9 +435,9 @@ async def get_workers(current_user: dict = Depends(get_current_user)):
     return {"workers": result, "total": len(result)}
 
 
-# ───────────────────────────────────────────
+# ───────────────────────────────────────────────────────
 # HEALTH CHECK
-# ───────────────────────────────────────────
+# ───────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health():

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../services/api.dart';
 
 class RegisterScreen extends StatefulWidget {
@@ -39,24 +40,44 @@ class _RegisterScreenState extends State<RegisterScreen> {
   ];
 
   Future<void> _handleRegister() async {
-    if (_form['email']!.isEmpty || _form['password']!.isEmpty || _form['full_name']!.isEmpty) {
+    if (_form['email']!.isEmpty ||
+        _form['password']!.isEmpty ||
+        _form['full_name']!.isEmpty) {
       _showError('Please fill in all required fields.');
       return;
     }
     setState(() => _loading = true);
     try {
-      final data = await ApiService.request(
-        '/auth/register',
-        method: 'POST',
-        body: _form,
-        auth: false,
+      // Step 1: Create Firebase Auth account
+      await FirebaseAuth.instance.createUserWithEmailAndPassword(
+        email: _form['email']!.trim(),
+        password: _form['password']!,
       );
-      await ApiService.saveToken(data['access_token']);
+
+      // Step 2: Sync profile to Firestore via backend
+      final data = await ApiService.request(
+        '/auth/sync-user',
+        method: 'POST',
+        body: {
+          'full_name':          _form['full_name'],
+          'phone_number':       _form['phone_number'],
+          'role':               _form['role'],
+          'state':              _form['state'],
+          'district':           _form['district'],
+          'block':              _form['block'],
+          'village':            _form['village'],
+          'preferred_language': _form['preferred_language'],
+        },
+      );
+
       await ApiService.saveUser({
-        'uid': data['user_id'],
-        'role': data['role'],
-        'email': _form['email'],
+        'uid':      data['user_id'],
+        'role':     data['role'],
+        'email':    _form['email'],
+        'state':    _form['state'],
+        'district': _form['district'],
       });
+
       if (!mounted) return;
       final role = data['role'] as String? ?? '';
       if (role == 'government' || role == 'admin') {
@@ -64,10 +85,27 @@ class _RegisterScreenState extends State<RegisterScreen> {
       } else {
         context.go('/dashboard/asha');
       }
+    } on FirebaseAuthException catch (e) {
+      _showError(_friendlyError(e.code));
     } catch (e) {
       _showError(e.toString().replaceAll('Exception: ', ''));
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  String _friendlyError(String code) {
+    switch (code) {
+      case 'email-already-in-use':
+        return 'This email is already registered.';
+      case 'weak-password':
+        return 'Password must be at least 6 characters.';
+      case 'invalid-email':
+        return 'Please enter a valid email address.';
+      case 'network-request-failed':
+        return 'Network error. Check your connection.';
+      default:
+        return 'Registration failed. Please try again.';
     }
   }
 
@@ -89,7 +127,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
             children: [
               const SizedBox(height: 24),
               const Text('Create Account',
-                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700, color: Color(0xFF1a1a2e))),
+                  style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF1a1a2e))),
               const SizedBox(height: 4),
               const Text('Water Disease Monitoring System',
                   style: TextStyle(fontSize: 14, color: Color(0xFF666666))),
@@ -101,13 +142,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
               _textField('Enter your email', (v) => _form['email'] = v,
                   keyboardType: TextInputType.emailAddress),
               _label('Password *'),
-              _textField('Create a password', (v) => _form['password'] = v, obscure: true),
+              _textField('Create a password (min 6 chars)',
+                  (v) => _form['password'] = v,
+                  obscure: true),
               _label('Phone Number'),
               _textField('+91XXXXXXXXXX', (v) => _form['phone_number'] = v,
                   keyboardType: TextInputType.phone),
 
               _label('Role *'),
-              _dropdown(_roles, _form['role']!, (v) => setState(() => _form['role'] = v)),
+              _dropdown(_roles, _form['role']!,
+                  (v) => setState(() => _form['role'] = v)),
 
               _label('State'),
               _textField('e.g. Assam', (v) => _form['state'] = v),
@@ -131,12 +175,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF007AFF),
                     foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
                   ),
                   child: _loading
                       ? const CircularProgressIndicator(color: Colors.white)
                       : const Text('Create Account',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w700)),
                 ),
               ),
               const SizedBox(height: 16),
@@ -144,7 +190,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 child: TextButton(
                   onPressed: () => context.pop(),
                   child: const Text('Already have an account? Sign in',
-                      style: TextStyle(color: Color(0xFF007AFF), fontSize: 14)),
+                      style:
+                          TextStyle(color: Color(0xFF007AFF), fontSize: 14)),
                 ),
               ),
               const SizedBox(height: 40),
@@ -158,11 +205,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Widget _label(String text) => Padding(
         padding: const EdgeInsets.only(top: 12, bottom: 4),
         child: Text(text,
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF333333))),
+            style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF333333))),
       );
 
   Widget _textField(String hint, Function(String) onChanged,
-      {TextInputType? keyboardType, bool obscure = false}) =>
+          {TextInputType? keyboardType, bool obscure = false}) =>
       Padding(
         padding: const EdgeInsets.only(bottom: 4),
         child: TextField(
@@ -179,12 +229,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
             enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
                 borderSide: const BorderSide(color: Color(0xFFe0e0e0))),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
           ),
         ),
       );
 
-  Widget _dropdown(List<Map<String, String>> items, String value, Function(String) onChanged) =>
+  Widget _dropdown(List<Map<String, String>> items, String value,
+          Function(String) onChanged) =>
       Container(
         margin: const EdgeInsets.only(bottom: 4),
         padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -198,7 +250,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
             value: value,
             isExpanded: true,
             items: items
-                .map((e) => DropdownMenuItem(value: e['value'], child: Text(e['label']!)))
+                .map((e) =>
+                    DropdownMenuItem(value: e['value'], child: Text(e['label']!)))
                 .toList(),
             onChanged: (v) => onChanged(v!),
           ),

@@ -4,7 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://192.168.1.7:8081/api/v1';
+  static const String baseUrl = 'http://192.168.1.7:8080/api/v1';
 
   static final Dio _dio = Dio(BaseOptions(
     baseUrl: baseUrl,

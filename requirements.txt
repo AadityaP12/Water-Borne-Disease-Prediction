@@ -1,0 +1,13 @@
+fastapi
+pydantic
+pydantic-settings
+firebase-admin
+joblib
+pandas
+numpy
+scikit-learn
+xgboost
+lightgbm
+matplotlib
+seaborn
+uvicorn

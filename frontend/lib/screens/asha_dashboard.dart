@@ -79,36 +79,54 @@ class _AshaDashboardState extends State<AshaDashboard> {
     _blockCtrl.text    = 'Guwahati';
     _villageCtrl.text  = 'Jalukbari';
 
+    // High-risk person — multiple severe symptoms
     _persons.add({
       'sex':              'male',
-      'age':              35,
-      'sanitation':       'poor',
-      'water_source':     'shallow_well',
-      'diarrhea':         2,
-      'fatigue':          1,
-      'vomiting':         0,
+      'age':              65,          // elderly → higher risk
+      'sanitation':       'poor',      // poor sanitation
+      'water_source':     'pond',      // open water source → high risk
+      'diarrhea':         2,           // severe (max severity)
+      'fatigue':          2,           // severe (max severity)
+      'vomiting':         1,
       'fever':            1,
-      'jaundice':         0,
+      'jaundice':         1,
       'headache':         1,
       'loss_of_appetite': 1,
-      'muscle_aches':     0,
+      'muscle_aches':     1,
+    });
+
+    // Second person also symptomatic — increases persons_with_symptoms
+    // which feeds into Stage 2 water model boosting water risk too
+    _persons.add({
+      'sex':              'female',
+      'age':              55,
+      'sanitation':       'poor',
+      'water_source':     'pond',
+      'diarrhea':         2,
+      'fatigue':          2,
+      'vomiting':         1,
+      'fever':            1,
+      'jaundice':         1,
+      'headache':         1,
+      'loss_of_appetite': 1,
+      'muscle_aches':     1,
     });
 
     _waterSources.add({
-      'name':             'Village Well',
-      'source_type':      'shallow_well',
-      'season':           'Monsoon',
-      'month':            DateTime.now().month,
-      'ph':               6.5,
-      'turbidity':        12.0,
-      'temperature':      28.0,
-      'rainfall':         45.0,
-      'dissolved_oxygen': 5.2,
-      'chlorine':         0.1,
-      'fecal_coliform':   180.0,
-      'hardness':         210.0,
-      'nitrate':          18.0,
-      'tds':              520.0,
+      'name':             'Village Pond',
+      'source_type':      'pond',          // open stagnant water → worst type
+      'season':           'Monsoon',       // monsoon → highest contamination risk
+      'month':            7,               // July — peak monsoon
+      'ph':               5.2,             // acidic (normal 6.5–8.5) → bad
+      'turbidity':        85.0,            // very high (normal <5 NTU) → bad
+      'temperature':      32.0,            // warm → bacteria thrive
+      'rainfall':         120.0,           // heavy rainfall → runoff contamination
+      'dissolved_oxygen': 2.1,             // very low (normal >6) → bad
+      'chlorine':         0.0,             // no chlorine treatment → bad
+      'fecal_coliform':   850.0,           // extremely high (safe <1) → worst
+      'hardness':         380.0,           // high
+      'nitrate':          48.0,            // high (safe <10 mg/L)
+      'tds':              1200.0,          // very high (safe <500 mg/L)
     });
   }
 

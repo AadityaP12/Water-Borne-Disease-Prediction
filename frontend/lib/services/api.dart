@@ -4,12 +4,15 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://192.168.1.7:8000/api/v1';
+  static const String baseUrl = 'https://flogging-tablet-activate.ngrok-free.dev/api/v1';
   static final Dio _dio = Dio(BaseOptions(
     baseUrl: baseUrl,
     connectTimeout: const Duration(seconds: 10),
     receiveTimeout: const Duration(seconds: 10),
-    headers: {'Content-Type': 'application/json'},
+    headers: {
+  'Content-Type': 'application/json',
+  'ngrok-skip-browser-warning': 'true',
+},
   ));
 
   // --- Get fresh Firebase ID token ---
@@ -54,7 +57,10 @@ class ApiService {
     if (auth) {
       final token = await getToken();
       if (token != null) {
-        options.headers = {'Authorization': 'Bearer $token'};
+        options.headers = {
+          'Authorization': 'Bearer $token',
+          'ngrok-skip-browser-warning': 'true',
+        };
       }
     }
 
